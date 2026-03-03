@@ -5,6 +5,19 @@ description: Core classes and functions for extending the MQTT Gateway
 
 This page documents the main Python components you can use when extending or integrating with the gateway.
 
+## Constants
+
+### Flow action types
+
+The gateway supports two action types for flows, defined in `src/constants.py:1-2`:
+
+```python
+FLOW_ACTION_STORE_DB = "STORE_DB"
+FLOW_ACTION_POST_ENDPOINT = "POST_ENDPOINT"
+```
+
+Use these constants when creating or querying flows programmatically to ensure consistency.
+
 ## Configuration
 
 ### Settings
