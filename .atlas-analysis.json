@@ -1,0 +1,80 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "MQTT Gateway",
+  "projectDescription": "Python service that receives MQTT messages and routes them to MariaDB or HTTP endpoints based on configurable flows.",
+  "theme": "aspen",
+  "primaryColor": "#00897B",
+  "lightColor": "#4DB6AC",
+  "darkColor": "#00695C",
+  "navigation": {
+    "groups": [
+      {
+        "group": "Getting Started",
+        "pages": [
+          "introduction",
+          "quickstart",
+          "installation"
+        ]
+      },
+      {
+        "group": "Configuration",
+        "pages": [
+          "configuration/environment-variables",
+          "configuration/database-setup",
+          "configuration/mqtt-broker"
+        ]
+      },
+      {
+        "group": "Core Concepts",
+        "pages": [
+          "concepts/flows",
+          "concepts/actions",
+          "concepts/payload-schemas"
+        ]
+      },
+      {
+        "group": "Deployment",
+        "pages": [
+          "deployment/docker",
+          "deployment/local-development",
+          "deployment/production"
+        ]
+      },
+      {
+        "group": "Operations",
+        "pages": [
+          "operations/logging",
+          "operations/monitoring",
+          "operations/troubleshooting"
+        ]
+      },
+      {
+        "group": "Reference",
+        "pages": [
+          "reference/database-schema",
+          "reference/flow-examples",
+          "reference/api"
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "MQTT message routing with configurable flows",
+    "Dual-action support: store in MariaDB or forward to HTTP endpoints",
+    "Dynamic flow reloading without service restart",
+    "JSON payload validation against configurable schemas",
+    "Docker containerization support",
+    "Automatic database initialization and seeding"
+  ],
+  "publicApiSurface": [
+    "GatewayMqttClient.run_forever()",
+    "GatewayMqttClient.reload_flows()",
+    "process_flow_message()",
+    "validate_payload()",
+    "Settings.load_settings()",
+    "initialize_database()",
+    "Flow model (STORE_DB, POST_ENDPOINT actions)",
+    "MqttServer model",
+    "DataRecord model"
+  ]
+}
