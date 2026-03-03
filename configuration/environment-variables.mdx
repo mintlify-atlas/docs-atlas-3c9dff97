@@ -1,0 +1,115 @@
+---
+title: Environment variables
+description: Configure MQTT Gateway using environment variables for database connections, MQTT settings, and operational parameters
+---
+
+MQTT Gateway is configured through environment variables defined in a `.env` file. All settings are loaded at startup from the environment.
+
+## Configuration file
+
+Create a `.env` file in the root directory of the project. You can use `.env.example` as a template:
+
+```bash
+cp .env.example .env
+```
+
+## Database connection
+
+<ParamField path="DB_HOST" type="string" required>
+  Database server hostname or IP address.
+  
+  Example: `192.168.0.137`
+</ParamField>
+
+<ParamField path="DB_PORT" type="integer" default="3306">
+  Database server port number.
+  
+  Example: `3306`
+</ParamField>
+
+<ParamField path="DB_NAME" type="string" required>
+  Name of the database to connect to.
+  
+  Example: `db`
+</ParamField>
+
+<ParamField path="DB_USER" type="string" required>
+  Database username for authentication.
+  
+  Example: `demo`
+</ParamField>
+
+<ParamField path="DB_PASSWORD" type="string" required>
+  Database password for authentication.
+  
+  Example: `demo`
+</ParamField>
+
+<Note>
+  The gateway uses these credentials to build a SQLAlchemy connection URL in the format:
+  `mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}`
+</Note>
+
+## MQTT settings
+
+<ParamField path="MQTT_CLIENT_ID" type="string" default="mqtt-gateway">
+  Unique identifier for the MQTT client connection. This ID is used when connecting to the MQTT broker.
+  
+  Example: `mqtt-gateway`
+</ParamField>
+
+<ParamField path="MQTT_KEEPALIVE" type="integer" default="60">
+  MQTT keepalive interval in seconds. The client will send ping messages to the broker at this interval to maintain the connection.
+  
+  Example: `60`
+</ParamField>
+
+## Operational settings
+
+<ParamField path="LOG_DIR" type="string" default="./log">
+  Directory path where log files will be written.
+  
+  Example: `./log`
+</ParamField>
+
+<ParamField path="HTTP_TIMEOUT_SECONDS" type="integer" default="10">
+  Timeout in seconds for HTTP requests when forwarding messages to HTTP endpoints.
+  
+  Example: `10`
+</ParamField>
+
+<ParamField path="FLOWS_RELOAD_INTERVAL_SECONDS" type="integer" default="600">
+  Interval in seconds between automatic reloads of flow configurations from the database. This allows the gateway to pick up configuration changes without restarting.
+  
+  Minimum value: `1`
+  
+  Example: `600` (10 minutes)
+</ParamField>
+
+## Example configuration
+
+```bash
+# Database connection
+DB_HOST=192.168.0.137
+DB_PORT=3306
+DB_NAME=db
+DB_USER=demo
+DB_PASSWORD=demo
+
+# Logging
+LOG_DIR=./log
+
+# HTTP settings
+HTTP_TIMEOUT_SECONDS=10
+
+# MQTT settings
+MQTT_CLIENT_ID=mqtt-gateway
+MQTT_KEEPALIVE=60
+
+# Flow configuration
+FLOWS_RELOAD_INTERVAL_SECONDS=600
+```
+
+<Warning>
+  Ensure that required environment variables (`DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`) are set before starting the gateway. Missing required variables will cause the application to fail at startup.
+</Warning>

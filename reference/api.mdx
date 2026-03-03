@@ -1,0 +1,290 @@
+---
+title: Python API reference
+description: Core classes and functions for extending the MQTT Gateway
+---
+
+This page documents the main Python components you can use when extending or integrating with the gateway.
+
+## Configuration
+
+### Settings
+
+Configuration dataclass loaded from environment variables.
+
+**Source:** `src/config.py:8-26`
+
+<ParamField path="db_host" type="string" required>
+  Database hostname (from `DB_HOST` env var)
+</ParamField>
+
+<ParamField path="db_port" type="integer" default="3306">
+  Database port (from `DB_PORT` env var)
+</ParamField>
+
+<ParamField path="db_name" type="string" required>
+  Database name (from `DB_NAME` env var)
+</ParamField>
+
+<ParamField path="db_user" type="string" required>
+  Database username (from `DB_USER` env var)
+</ParamField>
+
+<ParamField path="db_password" type="string" required>
+  Database password (from `DB_PASSWORD` env var)
+</ParamField>
+
+<ParamField path="log_dir" type="string" default="./log">
+  Log file directory (from `LOG_DIR` env var)
+</ParamField>
+
+<ParamField path="http_timeout_seconds" type="integer" default="10">
+  Timeout for HTTP POST requests (from `HTTP_TIMEOUT_SECONDS` env var)
+</ParamField>
+
+<ParamField path="mqtt_client_id" type="string" default="mqtt-gateway">
+  MQTT client identifier (from `MQTT_CLIENT_ID` env var)
+</ParamField>
+
+<ParamField path="mqtt_keepalive" type="integer" default="60">
+  MQTT keepalive interval in seconds (from `MQTT_KEEPALIVE` env var)
+</ParamField>
+
+<ParamField path="flows_reload_interval_seconds" type="integer" default="600">
+  How often to reload flows from database (from `FLOWS_RELOAD_INTERVAL_SECONDS` env var)
+</ParamField>
+
+**Property:**
+
+<ResponseField name="sqlalchemy_url" type="string">
+  Computed SQLAlchemy connection URL in format: `mysql+pymysql://{user}:{password}@{host}:{port}/{name}`
+</ResponseField>
+
+### load_settings()
+
+Loads configuration from environment variables using `python-dotenv`.
+
+```python
+from src.config import load_settings
+
+settings = load_settings()
+print(settings.db_host)
+```
+
+**Returns:** `Settings` instance
+
+**Raises:** `ValueError` if required environment variables are missing
+
+**Source:** `src/config.py:36-49`
+
+## MQTT Client
+
+### GatewayMqttClient
+
+Main client that connects to MQTT broker, subscribes to flow topics, and processes messages.
+
+**Source:** `src/mqtt_client.py:17-125`
+
+#### Constructor
+
+```python
+GatewayMqttClient(settings: Settings, session_factory, logger: logging.Logger)
+```
+
+<ParamField path="settings" type="Settings" required>
+  Configuration instance from `load_settings()`
+</ParamField>
+
+<ParamField path="session_factory" required>
+  SQLAlchemy session factory (e.g., from `sessionmaker()`)
+</ParamField>
+
+<ParamField path="logger" type="logging.Logger" required>
+  Logger instance for error and status messages
+</ParamField>
+
+#### load_mqtt_server()
+
+Returns the first enabled MQTT server from the database, prioritizing default servers.
+
+```python
+server = client.load_mqtt_server()
+```
+
+**Returns:** `MqttServer` instance
+
+**Raises:** `RuntimeError` if no enabled servers exist
+
+**Query:** `SELECT * FROM mqtt_servers WHERE enabled = 1 ORDER BY is_default DESC, id ASC LIMIT 1`
+
+**Source:** `src/mqtt_client.py:25-35`
+
+#### load_flows()
+
+Returns all enabled flows from the database.
+
+```python
+flows = client.load_flows()
+```
+
+**Returns:** `list[Flow]`
+
+**Query:** `SELECT * FROM flows WHERE enabled = 1`
+
+**Source:** `src/mqtt_client.py:37-40`
+
+#### reload_flows()
+
+Reloads flows from the database and updates MQTT subscriptions dynamically.
+
+```python
+client.reload_flows()
+```
+
+This method:
+1. Fetches current enabled flows
+2. Compares with previous subscriptions
+3. Subscribes to new topics
+4. Unsubscribes from removed topics
+
+**Source:** `src/mqtt_client.py:55-63`
+
+#### run_forever()
+
+Main loop that connects to MQTT broker and processes messages indefinitely.
+
+```python
+client.run_forever()
+```
+
+This method:
+1. Loads MQTT server configuration
+2. Loads initial flows
+3. Connects to broker with authentication if configured
+4. Starts MQTT loop
+5. Periodically reloads flows every `flows_reload_interval_seconds`
+
+**Blocks until interrupted**
+
+**Source:** `src/mqtt_client.py:103-125`
+
+#### on_connect()
+
+Callback triggered when MQTT connection is established. Subscribes to all flow topics.
+
+**Source:** `src/mqtt_client.py:65-72`
+
+#### on_message()
+
+Callback triggered when an MQTT message arrives. Validates JSON payload and routes to matching flows.
+
+**Behavior:**
+- Decodes payload as UTF-8 JSON object
+- Matches message topic against flow patterns (supports wildcards)
+- Calls `process_flow_message()` for each matching flow
+- Logs errors without crashing
+
+**Source:** `src/mqtt_client.py:74-101`
+
+## Message Processing
+
+### ProcessResult
+
+Dataclass returned by `process_flow_message()` with processing metadata.
+
+**Source:** `src/processor.py:16-21`
+
+<ResponseField name="flow_code" type="string">
+  The flow's unique code identifier
+</ResponseField>
+
+<ResponseField name="msg_id" type="integer">
+  The incremented message ID after processing
+</ResponseField>
+
+<ResponseField name="action" type="string">
+  The action that was performed (`STORE_DB` or `POST_ENDPOINT`)
+</ResponseField>
+
+### process_flow_message()
+
+Processes a single MQTT message according to flow configuration.
+
+```python
+from src.processor import process_flow_message
+
+result = process_flow_message(
+    session_factory=session_factory,
+    settings=settings,
+    logger=logger,
+    flow_id=1,
+    payload={"temperature": 23.5, "humidity": 65.2}
+)
+```
+
+<ParamField path="session_factory" required>
+  SQLAlchemy session factory
+</ParamField>
+
+<ParamField path="settings" type="Settings" required>
+  Configuration instance
+</ParamField>
+
+<ParamField path="logger" type="logging.Logger" required>
+  Logger for error messages
+</ParamField>
+
+<ParamField path="flow_id" type="integer" required>
+  Database ID of the flow to process
+</ParamField>
+
+<ParamField path="payload" type="dict[str, Any]" required>
+  Parsed JSON payload from MQTT message
+</ParamField>
+
+**Returns:** `ProcessResult`
+
+**Raises:** `ValueError` if payload validation fails or endpoint_url is missing for POST_ENDPOINT
+
+**Processing steps:**
+1. Locks the flow row with `SELECT ... FOR UPDATE`
+2. Validates payload against `payload_schema` using `validate_payload()`
+3. Increments `last_msg_id`
+4. For `STORE_DB`: Creates `DataRecord` entries for each payload field
+5. For `POST_ENDPOINT`: POSTs JSON payload to `endpoint_url`
+
+**Source:** `src/processor.py:79-135`
+
+### validate_payload()
+
+Validates that payload matches the expected schema.
+
+```python
+from src.processor import validate_payload
+
+validate_payload(
+    payload={"temperature": 23.5, "humidity": 65.2},
+    payload_schema={"temperature": "float", "humidity": "float"}
+)
+```
+
+<ParamField path="payload" type="dict[str, Any]" required>
+  The message payload to validate
+</ParamField>
+
+<ParamField path="payload_schema" type="dict[str, Any]" required>
+  Expected structure with field names and types
+</ParamField>
+
+**Raises:** `ValueError` with descriptive message if:
+- Required field is missing
+- Field has incorrect type
+
+**Supported type mappings:**
+- `string`, `str` → Python `str`
+- `number`, `float` → Python `int` or `float`
+- `int`, `integer` → Python `int`
+- `bool`, `boolean` → Python `bool`
+- `object` → Python `dict`
+- `array` → Python `list`
+
+**Source:** `src/processor.py:56-71`

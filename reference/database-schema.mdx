@@ -1,0 +1,130 @@
+---
+title: Database schema
+description: Complete reference for the MQTT Gateway database tables and models
+---
+
+The MQTT Gateway uses MariaDB with SQLAlchemy ORM. The schema consists of three main tables defined in `src/models.py`.
+
+## MqttServer
+
+Stores MQTT broker connection information. The gateway connects to the first enabled server, prioritizing those marked as default.
+
+**Table name:** `mqtt_servers`
+
+<ResponseField name="id" type="integer" required>
+  Primary key, auto-incremented
+</ResponseField>
+
+<ResponseField name="host" type="string(255)" required>
+  MQTT broker hostname or IP address
+</ResponseField>
+
+<ResponseField name="port" type="integer" default="1883">
+  MQTT broker port number
+</ResponseField>
+
+<ResponseField name="username" type="string(255)">
+  Authentication username (optional)
+</ResponseField>
+
+<ResponseField name="password" type="string(255)">
+  Authentication password (optional)
+</ResponseField>
+
+<ResponseField name="enabled" type="boolean" default="true">
+  Whether this server is active. Only enabled servers are considered for connection
+</ResponseField>
+
+<ResponseField name="is_default" type="boolean" default="true">
+  Priority flag. The gateway selects enabled servers ordered by `is_default DESC, id ASC`
+</ResponseField>
+
+**Source:** `src/models.py:10-20`
+
+## Flow
+
+Defines message routing rules. Each flow specifies a topic to subscribe to, validation schema, and destination action.
+
+**Table name:** `flows`
+
+<ResponseField name="id" type="integer" required>
+  Primary key, auto-incremented
+</ResponseField>
+
+<ResponseField name="code" type="string(100)" required>
+  Unique identifier for the flow (e.g., `AHT10_SENSOR`)
+</ResponseField>
+
+<ResponseField name="description" type="string(255)" required>
+  Human-readable description of the flow's purpose
+</ResponseField>
+
+<ResponseField name="topic" type="string(255)" required>
+  MQTT topic pattern to subscribe to. Supports MQTT wildcards (`+`, `#`)
+</ResponseField>
+
+<ResponseField name="action" type="string(30)" required>
+  Processing action to perform. Valid values:
+  - `STORE_DB`: Save payload attributes to the `data` table
+  - `POST_ENDPOINT`: Forward payload to an HTTP endpoint
+</ResponseField>
+
+<ResponseField name="payload_schema" type="JSON" required>
+  Expected payload structure for validation. Format: `{"field_name": "type"}`
+  
+  Supported types: `string`, `str`, `number`, `float`, `int`, `integer`, `bool`, `boolean`, `object`, `array`
+  
+  Example: `{"temperature": "float", "humidity": "float"}`
+</ResponseField>
+
+<ResponseField name="endpoint_url" type="string(500)">
+  HTTP endpoint URL (required when `action` is `POST_ENDPOINT`)
+</ResponseField>
+
+<ResponseField name="last_msg_id" type="integer" default="0">
+  Message counter, incremented with each processed message
+</ResponseField>
+
+<ResponseField name="enabled" type="boolean" default="true">
+  Whether this flow is active. Disabled flows are not processed
+</ResponseField>
+
+**Source:** `src/models.py:22-34`
+
+## DataRecord
+
+Stores individual attribute values from MQTT messages processed by `STORE_DB` flows. Each payload field creates a separate record.
+
+**Table name:** `data`
+
+<ResponseField name="id" type="integer" required>
+  Primary key, auto-incremented
+</ResponseField>
+
+<ResponseField name="received_at" type="datetime" required>
+  UTC timestamp when the message was processed (default: `datetime.utcnow()`)
+</ResponseField>
+
+<ResponseField name="flow_code" type="string(100)" required>
+  Reference to the flow that processed this message (matches `Flow.code`)
+</ResponseField>
+
+<ResponseField name="attribute_name" type="string(255)" required>
+  Payload field name (e.g., `temperature`, `humidity`)
+</ResponseField>
+
+<ResponseField name="attribute_value" type="text" required>
+  Serialized value. Primitive types are converted to strings, objects/arrays are JSON-encoded
+</ResponseField>
+
+<ResponseField name="last_msg_id" type="integer" required>
+  Message ID from the flow's counter at time of processing
+</ResponseField>
+
+**Source:** `src/models.py:36-47`
+
+## Schema relationships
+
+- `MqttServer` has no direct foreign keys but is loaded by `GatewayMqttClient.load_mqtt_server()` (`src/mqtt_client.py:25-35`)
+- `Flow` is referenced by `DataRecord` via `flow_code` (not enforced as foreign key)
+- Message IDs in `DataRecord.last_msg_id` correspond to `Flow.last_msg_id`

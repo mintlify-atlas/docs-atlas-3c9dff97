@@ -1,0 +1,243 @@
+---
+title: Troubleshooting
+description: Common issues and solutions for MQTT Gateway
+---
+
+This guide covers common issues you may encounter when running MQTT Gateway and how to resolve them.
+
+## Database connection issues
+
+<Accordion title="Service won't start - database connection error">
+
+If the service fails to start with a database connection error, verify:
+
+1. **Database is accessible**: Test connectivity from your environment
+   ```bash
+   mysql -h 192.168.0.137 -P 3306 -u demo -p
+   ```
+
+2. **Environment variables are correct**: Check your `.env` file
+   ```bash
+   DB_HOST=192.168.0.137
+   DB_PORT=3306
+   DB_NAME=db
+   DB_USER=demo
+   DB_PASSWORD=demo
+   ```
+
+3. **Docker network connectivity**: When running in Docker, ensure the container can reach the database host (README.md:122)
+
+4. **Required environment variables**: The application requires `DB_HOST`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` (src/config.py:39-43)
+
+</Accordion>
+
+<Accordion title="Connection works initially but fails later">
+
+The database engine uses `pool_pre_ping=True` to handle stale connections (src/db.py:9). If you still see connection errors:
+
+- Check database server logs for connection limits
+- Verify network stability between service and database
+- Review MariaDB `max_connections` setting
+
+</Accordion>
+
+## MQTT connection issues
+
+<Accordion title="MQTT connection failed with reason code">
+
+Check your log files for the specific reason code (src/mqtt_client.py:67):
+
+```
+ERROR | mqtt_gateway | MQTT connection failed with reason code: 5
+```
+
+**Common reason codes:**
+- **Code 1**: Protocol version mismatch - verify broker supports MQTT 3.1.1 or 5.0
+- **Code 3**: Broker unavailable - check broker is running and accessible
+- **Code 4**: Invalid credentials - verify username/password in `mqtt_servers` table
+- **Code 5**: Not authorized - check broker ACL settings
+
+**Steps to diagnose:**
+1. Verify broker is running: `telnet 192.168.0.137 1883`
+2. Check `mqtt_servers` table has an enabled server
+3. Verify authentication credentials if required
+4. Test with another MQTT client (e.g., `mosquitto_sub`)
+
+</Accordion>
+
+<Accordion title="No enabled MQTT server found">
+
+The service requires at least one enabled MQTT server in the database (src/mqtt_client.py:34):
+
+```
+RuntimeError: No enabled MQTT server found in mqtt_servers
+```
+
+**Solution**: The default server is seeded automatically on first run (src/db.py:27-35). If missing:
+
+```sql
+INSERT INTO mqtt_servers (host, port, enabled, is_default)
+VALUES ('192.168.0.137', 1883, 1, 1);
+```
+
+</Accordion>
+
+## Message processing issues
+
+<Accordion title="Messages not being processed">
+
+If the service is running but messages aren't being processed:
+
+1. **Verify flows are enabled** (README.md:123)
+   ```sql
+   SELECT code, topic, enabled FROM flows;
+   ```
+   Ensure at least one flow has `enabled = 1`
+
+2. **Check topic subscription**: The service subscribes to topics from enabled flows (src/mqtt_client.py:71-72)
+
+3. **Verify message format**: Payload must be a JSON object, not an array or primitive (src/mqtt_client.py:78-79)
+
+4. **Check payload schema**: Ensure message matches the flow's `payload_schema` (src/processor.py:92)
+
+5. **Monitor message counter**: Check if `last_msg_id` is incrementing in the `flows` table
+
+</Accordion>
+
+<Accordion title="Invalid payload in topic error">
+
+This error occurs when the payload cannot be decoded (src/mqtt_client.py:81):
+
+```
+ERROR | mqtt_gateway | Invalid payload in topic sensor/temp: Expecting value: line 1 column 1 (char 0)
+```
+
+**Common causes:**
+- Payload is not valid JSON
+- Payload encoding is not UTF-8
+- Payload is a JSON array or primitive instead of an object
+
+**Valid payload example:**
+```json
+{"temperature": 29.47, "humidity": 47.85}
+```
+
+**Invalid payloads:**
+```json
+[29.47, 47.85]  // Array - not allowed
+"29.47"         // String primitive - not allowed
+29.47           // Number primitive - not allowed
+```
+
+</Accordion>
+
+<Accordion title="Missing attribute or type validation errors">
+
+The processor validates payloads against the flow's `payload_schema` (src/processor.py:56-70):
+
+```
+ValueError: Missing attribute 'temperature' in payload
+ValueError: Invalid type for 'humidity'. Expected 'float', got 'str'
+```
+
+**Solution**: Ensure your payload includes all required attributes with correct types.
+
+Example `payload_schema`:
+```json
+{
+  "temperature": "float",
+  "humidity": "float"
+}
+```
+
+Supported type names (src/processor.py:23-34):
+- `string`, `str`
+- `number`, `float`, `int`, `integer`
+- `bool`, `boolean`
+- `object`
+- `array`
+
+</Accordion>
+
+## HTTP endpoint issues
+
+<Accordion title="POST_ENDPOINT action failing">
+
+When a flow uses `action=POST_ENDPOINT`, check logs for HTTP errors (src/processor.py:124-129):
+
+```
+ERROR | mqtt_gateway | Error posting flow TEMP_MONITOR to endpoint http://api.example.com/data: Connection timeout
+```
+
+**Common issues:**
+1. **Empty endpoint_url**: Verify the flow has a valid `endpoint_url` (README.md:124)
+2. **Timeout**: Increase `HTTP_TIMEOUT_SECONDS` environment variable (default: 10 seconds)
+3. **HTTP errors**: Check endpoint returns 2xx status code
+4. **Network connectivity**: Verify service can reach the endpoint
+
+<Warning>
+Failed HTTP POST requests are logged but don't retry. The message's `last_msg_id` is still incremented.
+</Warning>
+
+</Accordion>
+
+## Flow reload issues
+
+<Accordion title="New flows not being picked up">
+
+Flows are reloaded automatically every `FLOWS_RELOAD_INTERVAL_SECONDS` (default: 600 seconds / 10 minutes):
+
+1. **Wait for next reload**: Changes take effect within the reload interval
+2. **Check reload errors**: Look for flow reload errors in logs (src/mqtt_client.py:122)
+3. **Verify flow is enabled**: Check `enabled = 1` in database
+4. **Restart service**: For immediate effect, restart the service
+
+<Note>
+The service dynamically subscribes and unsubscribes from topics without restarting (src/mqtt_client.py:55-63).
+</Note>
+
+</Accordion>
+
+## Log and permissions issues
+
+<Accordion title="Log directory errors">
+
+If the service can't create or write to log files:
+
+1. **Check directory permissions**: Ensure write access to `LOG_DIR`
+   ```bash
+   chmod 755 ./log
+   ```
+
+2. **Verify directory exists**: The logger creates it automatically (src/logging_setup.py:14), but parent must exist
+
+3. **Docker volume mounts**: Ensure proper volume mapping
+   ```bash
+   -v "$(pwd)/log:/app/log"
+   ```
+
+</Accordion>
+
+<Accordion title="No logs being written">
+
+The logger only captures **ERROR level and above** (src/logging_setup.py:40). If you don't see logs:
+
+1. **No errors**: The service may be running without errors
+2. **Check log directory**: Verify files exist in `LOG_DIR`
+3. **Check file names**: Files use format `YYYY-MM-DD.log`
+4. **Verify timestamp**: Ensure you're checking today's log file
+
+</Accordion>
+
+## Startup errors
+
+<Accordion title="Service exits immediately after starting">
+
+Fatal startup errors are logged before the process exits with code 1 (src/main.py:27-35):
+
+1. **Check log files**: Look for "Fatal error during startup" messages
+2. **Verify environment**: Ensure all required environment variables are set
+3. **Test database**: Verify database is accessible and user has permissions
+4. **Check MQTT server**: Ensure `mqtt_servers` table has at least one enabled entry
+
+</Accordion>

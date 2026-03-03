@@ -1,80 +1,244 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick start
+description: Get MQTT Gateway running in under 5 minutes with this fast-track guide
 ---
 
-## Get started in three steps
+Get MQTT Gateway up and running quickly with this streamlined guide. For detailed installation instructions, see the [installation guide](/installation).
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+Before you begin, ensure you have:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+- Python 3.12 or higher
+- MariaDB or MySQL server (accessible on your network)
+- MQTT broker (e.g., Mosquitto, HiveMQ)
+
+<Note>
+  Don't have an MQTT broker? You can use test.mosquitto.org or install Mosquitto locally with `sudo apt install mosquitto mosquitto-clients`
+</Note>
+
+## Installation
+
+<Steps>
+  <Step title="Clone and setup">
+    Clone the repository and create a virtual environment:
+
+    ```bash
+    git clone https://github.com/gsampallo/MQTTGateway.git
+    cd MQTTGateway
+    python -m venv .venv
+    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    Install the required Python packages:
+
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+    This installs SQLAlchemy, PyMySQL, paho-mqtt, requests, and python-dotenv.
+  </Step>
+
+  <Step title="Configure environment">
+    Create a `.env` file with your database and MQTT broker settings:
+
+    ```bash
+    cp .env.example .env
+    ```
+
+    Edit `.env` with your database credentials:
+
+    ```bash
+    DB_HOST=192.168.0.137
+    DB_PORT=3306
+    DB_NAME=db
+    DB_USER=demo
+    DB_PASSWORD=demo
+    LOG_DIR=./log
+    HTTP_TIMEOUT_SECONDS=10
+    MQTT_CLIENT_ID=mqtt-gateway
+    MQTT_KEEPALIVE=60
+    FLOWS_RELOAD_INTERVAL_SECONDS=600
+    ```
+
+    <Warning>
+      Update `DB_HOST`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` to match your MariaDB server configuration.
+    </Warning>
+  </Step>
+
+  <Step title="Start the gateway">
+    Run the gateway:
+
+    ```bash
+    python app.py
+    ```
+
+    On first run, the gateway will:
+    - Create database tables (`mqtt_servers`, `flows`, `data`)
+    - Insert a default MQTT broker configuration
+    - Connect to your MQTT broker
+  </Step>
+</Steps>
+
+## Create your first flow
+
+Now let's create a flow to receive and store sensor data from MQTT.
+
+<Steps>
+  <Step title="Connect to your database">
+    Connect to your MariaDB database using your preferred client:
+
+    ```bash
+    mysql -h 192.168.0.137 -u demo -p db
+    ```
+  </Step>
+
+  <Step title="Insert a flow">
+    Create a flow that listens to the `sensors/aht10` topic and stores data in the database:
+
+    ```sql
+    INSERT INTO flows (
+      code,
+      description,
+      topic,
+      action,
+      payload_schema,
+      endpoint_url,
+      last_msg_id,
+      enabled
+    )
+    VALUES (
+      'AHT10_SENSOR',
+      'Flow sensor de temperatura y humedad',
+      'sensors/aht10',
+      'STORE_DB',
+      '{"temperature":"float","humidity":"float"}',
+      NULL,
+      0,
+      1
+    );
+    ```
+
+    This flow:
+    - Subscribes to the `sensors/aht10` MQTT topic
+    - Validates incoming messages against the schema (requires `temperature` and `humidity` as floats)
+    - Stores valid messages in the `data` table
+  </Step>
+
+  <Step title="Wait for flow reload">
+    The gateway reloads flows every 10 minutes by default. To see your flow immediately, restart the gateway:
+
+    ```bash
+    # Press Ctrl+C to stop, then restart
+    python app.py
+    ```
+
+    <Info>
+      In production, you can adjust `FLOWS_RELOAD_INTERVAL_SECONDS` to reload flows more frequently.
+    </Info>
+  </Step>
+
+  <Step title="Publish a test message">
+    Publish a test message to the MQTT broker using mosquitto_pub:
+
+    ```bash
+    mosquitto_pub -h 192.168.0.137 -t sensors/aht10 \
+      -m '{"temperature":29.47,"humidity":47.85}'
+    ```
+
+    Or using Python:
+
+    ```python
+    import paho.mqtt.publish as publish
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    publish.single(
+        "sensors/aht10",
+        '{"temperature":29.47,"humidity":47.85}',
+        hostname="192.168.0.137"
+    )
+    ```
+  </Step>
+</Steps>
 
-### Step 2: Deploy your changes
+## Verify the data
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+Query the `data` table to see your stored message:
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+```sql
+SELECT * FROM data ORDER BY received_at DESC LIMIT 10;
+```
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+Expected output:
 
-### Step 3: Go live
+| id | received_at | flow_code | attribute_name | attribute_value | last_msg_id |
+|----|-------------|-----------|----------------|-----------------|-------------|
+| 1  | 2024-03-03 ... | AHT10_SENSOR | temperature | 29.47 | 1 |
+| 2  | 2024-03-03 ... | AHT10_SENSOR | humidity | 47.85 | 1 |
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+Each attribute from the JSON payload is stored as a separate row, linked by the `last_msg_id` counter.
+
+## Try an HTTP endpoint flow
+
+You can also forward messages to HTTP endpoints instead of storing them in the database.
+
+Create a flow with the `POST_ENDPOINT` action:
+
+```sql
+INSERT INTO flows (
+  code,
+  description,
+  topic,
+  action,
+  payload_schema,
+  endpoint_url,
+  last_msg_id,
+  enabled
+)
+VALUES (
+  'AHT10_ENDPOINT',
+  'Flow para publicar a endpoint HTTP',
+  'sensors/aht10/http',
+  'POST_ENDPOINT',
+  '{"temperature":"float","humidity":"float"}',
+  'http://host.docker.internal:8080/iot/data',
+  0,
+  1
+);
+```
+
+When a message arrives on `sensors/aht10/http`, the gateway will POST it to the configured endpoint URL.
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card
+    title="Installation guide"
+    icon="download"
+    href="/installation"
+  >
+    Detailed installation and Docker deployment instructions
+  </Card>
+  <Card
+    title="Configuration"
+    icon="gear"
+    href="/configuration/environment-variables"
+  >
+    Learn about all environment variables and database settings
+  </Card>
+  <Card
+    title="Flows"
+    icon="diagram-project"
+    href="/concepts/flows"
+  >
+    Understand how flows work and how to configure them
+  </Card>
+  <Card
+    title="Flow examples"
+    icon="book"
+    href="/reference/flow-examples"
+  >
+    Explore real-world flow examples and use cases
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

@@ -1,0 +1,153 @@
+---
+title: MQTT Gateway
+description: Python infrastructure service that receives MQTT messages and routes them to MariaDB or HTTP endpoints based on configurable flows
+---
+
+<img
+  className="block dark:hidden"
+  src="/images/hero-light.svg"
+  alt="Hero Light"
+/>
+<img
+  className="hidden dark:block"
+  src="/images/hero-dark.svg"
+  alt="Hero Dark"
+/>
+
+## What is MQTT Gateway?
+
+MQTT Gateway is a lightweight, production-ready Python service designed to bridge MQTT messaging with persistent storage and HTTP endpoints. It provides a flexible, database-driven flow system that allows you to define how incoming MQTT messages should be processed without code changes.
+
+The gateway automatically creates database tables, manages MQTT broker connections, and dynamically reloads flows without requiring service restarts.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card
+    title="Database-driven flows"
+    icon="database"
+  >
+    Define message processing flows in MariaDB without touching code. Enable, disable, or modify flows on the fly.
+  </Card>
+  <Card
+    title="Dual routing modes"
+    icon="code-branch"
+  >
+    Route messages to MariaDB for persistence or forward them to HTTP endpoints for external processing.
+  </Card>
+  <Card
+    title="Dynamic subscription management"
+    icon="arrows-rotate"
+  >
+    Flows are reloaded every 10 minutes (configurable). Add or remove MQTT topic subscriptions without restarting.
+  </Card>
+  <Card
+    title="Schema validation"
+    icon="shield-check"
+  >
+    Define JSON schemas for each flow. Invalid payloads are rejected and logged automatically.
+  </Card>
+  <Card
+    title="Production ready"
+    icon="check-circle"
+  >
+    Built with SQLAlchemy, automatic database initialization, connection pooling, and daily rotating logs.
+  </Card>
+  <Card
+    title="Docker support"
+    icon="docker"
+  >
+    Ships with a production Dockerfile using Python 3.12 slim base. Easy deployment with environment variables.
+  </Card>
+</CardGroup>
+
+## How it works
+
+1. **Startup**: The gateway connects to your MariaDB database and creates three tables (`mqtt_servers`, `flows`, `data`) if they don't exist
+2. **MQTT connection**: It reads the enabled MQTT broker from `mqtt_servers` and connects using the paho-mqtt client
+3. **Flow loading**: All enabled flows are loaded from the database, and the gateway subscribes to their MQTT topics
+4. **Message processing**: When a message arrives, the payload is validated against the flow's schema and then either:
+   - Stored in the `data` table with one row per attribute (action: `STORE_DB`)
+   - Posted to an HTTP endpoint (action: `POST_ENDPOINT`)
+5. **Hot reload**: Every 10 minutes, flows are reloaded and subscriptions are synchronized without disconnecting from MQTT
+
+## Architecture
+
+<CodeGroup>
+```python src/main.py
+def run() -> None:
+    settings = load_settings()
+    logger = setup_error_logger(settings.log_dir)
+
+    try:
+        engine = build_engine(settings)
+        session_factory = build_session_factory(engine)
+        initialize_database(engine)
+        seed_default_mqtt_server(session_factory)
+
+        mqtt_client = GatewayMqttClient(
+            settings=settings,
+            session_factory=session_factory,
+            logger=logger,
+        )
+        mqtt_client.run_forever()
+    except Exception as exc:
+        logger.error("Fatal error during startup: %s", exc)
+        raise
+```
+
+```python src/models.py
+class Flow(Base):
+    __tablename__ = "flows"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    description: Mapped[str] = mapped_column(String(255), nullable=False)
+    topic: Mapped[str] = mapped_column(String(255), nullable=False)
+    action: Mapped[str] = mapped_column(String(30), nullable=False)
+    payload_schema: Mapped[dict] = mapped_column(JSON, nullable=False)
+    endpoint_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    last_msg_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+```
+</CodeGroup>
+
+## Use cases
+
+- **IoT sensor data collection**: Collect temperature, humidity, or other sensor readings from MQTT-enabled devices and store them in MariaDB
+- **Event forwarding**: Route MQTT events to HTTP APIs for processing by downstream services
+- **Multi-tenant data ingestion**: Use different flows for different devices or tenants, all managed through database configuration
+- **Hybrid storage**: Store critical data in the database while forwarding copies to external analytics platforms
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card
+    title="Quick start"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Get MQTT Gateway running in under 5 minutes
+  </Card>
+  <Card
+    title="Installation"
+    icon="download"
+    href="/installation"
+  >
+    Detailed installation instructions for local and Docker deployments
+  </Card>
+  <Card
+    title="Configuration"
+    icon="gear"
+    href="/configuration/environment-variables"
+  >
+    Learn about environment variables and database-driven flows
+  </Card>
+  <Card
+    title="API reference"
+    icon="code"
+    href="/reference/database-schema"
+  >
+    Explore the database schema and flow configuration options
+  </Card>
+</CardGroup>

@@ -1,0 +1,125 @@
+---
+title: Logging
+description: Logging configuration and behavior in MQTT Gateway
+---
+
+MQTT Gateway uses a custom daily rotating file logger that captures errors and critical events during operation.
+
+## Log directory configuration
+
+The log directory is configured via the `LOG_DIR` environment variable:
+
+```bash
+LOG_DIR=./log
+```
+
+The default value is `./log` if not specified (src/config.py:44).
+
+<Note>
+The log directory is automatically created if it doesn't exist when the logger is initialized (src/logging_setup.py:14).
+</Note>
+
+## Log file rotation
+
+Log files are created daily with the naming pattern `YYYY-MM-DD.log`. The `DailyFileHandler` automatically:
+
+- Creates a new log file each day based on the current date
+- Writes to the current day's file in append mode
+- Closes the previous day's file when the date changes
+- Thread-safe file operations using locks (src/logging_setup.py:7-35)
+
+Example log files:
+```
+log/
+  2026-03-01.log
+  2026-03-02.log
+  2026-03-03.log
+```
+
+## Log level and format
+
+The logger is configured to capture **ERROR level and above** only (src/logging_setup.py:40):
+
+```python
+logger.setLevel(logging.ERROR)
+```
+
+Log entries follow this format:
+```
+YYYY-MM-DD HH:MM:SS | LEVEL | NAME | MESSAGE
+```
+
+Example:
+```
+2026-03-03 14:23:45 | ERROR | mqtt_gateway | MQTT connection failed with reason code: 5
+```
+
+## What gets logged
+
+### Startup errors
+
+Fatal errors during application startup are logged before the process exits (src/main.py:27):
+
+```python
+logger.error("Fatal error during startup: %s", exc)
+```
+
+### MQTT connection failures
+
+When the MQTT client fails to connect to the broker (src/mqtt_client.py:67):
+
+```python
+logger.error("MQTT connection failed with reason code: %s", reason_code)
+```
+
+### Invalid message payloads
+
+When a message payload cannot be decoded or is not valid JSON (src/mqtt_client.py:81):
+
+```python
+logger.error("Invalid payload in topic %s: %s", topic, exc)
+```
+
+### Flow processing errors
+
+Errors during message processing for a specific flow (src/mqtt_client.py:101):
+
+```python
+logger.error("Error processing topic %s (flow_id=%s): %s", topic, flow_id, exc)
+```
+
+### HTTP endpoint failures
+
+When POST_ENDPOINT action fails to deliver the payload (src/processor.py:124-129):
+
+```python
+logger.error(
+    "Error posting flow %s to endpoint %s: %s",
+    db_flow.code,
+    db_flow.endpoint_url,
+    exc,
+)
+```
+
+### Flow reload errors
+
+Errors that occur when periodically reloading flows from the database (src/mqtt_client.py:122):
+
+```python
+logger.error("Error reloading flows: %s", exc)
+```
+
+## Docker logging
+
+When running in Docker, mount the log directory as a volume to persist logs:
+
+```bash
+docker run --rm \
+  -e LOG_DIR=/app/log \
+  -v "$(pwd)/log:/app/log" \
+  mqtt-gateway:latest
+```
+
+<Warning>
+Logs are only written to files, not to stdout/stderr. Ensure the log directory is accessible and has write permissions.
+</Warning>

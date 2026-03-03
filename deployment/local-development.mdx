@@ -1,0 +1,239 @@
+---
+title: Local development setup
+description: Set up MQTT Gateway for local development and testing
+---
+
+Set up the MQTT Gateway on your local machine for development, debugging, and testing.
+
+## Prerequisites
+
+- Python 3.12 or higher
+- Access to a MariaDB instance (test environment: `192.168.0.137:3306`)
+- Access to an MQTT broker (default: `192.168.0.137:1883`)
+
+## Installation
+
+<Steps>
+  <Step title="Clone the repository">
+    Clone the project and navigate to the source directory:
+
+    ```bash
+    cd ~/workspace/source
+    ```
+  </Step>
+
+  <Step title="Create virtual environment">
+    Create and activate a Python virtual environment:
+
+    ```bash
+    python -m venv .venv
+    source .venv/bin/activate
+    ```
+
+    On Windows, use:
+
+    ```bash
+    .venv\Scripts\activate
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    Install required Python packages:
+
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+    This installs:
+    - `SQLAlchemy>=2.0.0` - Database ORM
+    - `PyMySQL>=1.1.0` - MariaDB driver
+    - `paho-mqtt>=2.1.0` - MQTT client
+    - `requests>=2.32.0` - HTTP client for POST_ENDPOINT flows
+    - `python-dotenv>=1.0.1` - Environment variable management
+  </Step>
+
+  <Step title="Configure environment">
+    Copy the example environment file and adjust variables:
+
+    ```bash
+    cp .env.example .env
+    ```
+
+    Edit `.env` with your configuration:
+
+    ```bash
+    DB_HOST=192.168.0.137
+    DB_PORT=3306
+    DB_NAME=db
+    DB_USER=demo
+    DB_PASSWORD=demo
+    LOG_DIR=./log
+    HTTP_TIMEOUT_SECONDS=10
+    MQTT_CLIENT_ID=mqtt-gateway
+    MQTT_KEEPALIVE=60
+    FLOWS_RELOAD_INTERVAL_SECONDS=600
+    ```
+  </Step>
+
+  <Step title="Run the application">
+    Start the gateway:
+
+    ```bash
+    python app.py
+    ```
+  </Step>
+</Steps>
+
+## What happens on startup
+
+When you run `python app.py`, the gateway performs these initialization steps:
+
+1. **Load configuration** - Reads environment variables from `.env` using `src/config.py:36`
+2. **Initialize logging** - Sets up error logger with daily log rotation in `LOG_DIR`
+3. **Create database tables** - Creates `mqtt_servers`, `flows`, and `data` tables if they don't exist
+4. **Seed default broker** - Inserts default MQTT broker `192.168.0.137:1883` if no enabled broker exists
+5. **Load flows** - Loads all enabled flows from the database
+6. **Subscribe to topics** - Subscribes to MQTT topics defined in enabled flows
+7. **Start reload timer** - Reloads flows every `FLOWS_RELOAD_INTERVAL_SECONDS` (default: 10 minutes)
+
+The main application entry point is in `app.py:1`:
+
+```python
+from src.main import run
+
+if __name__ == "__main__":
+    run()
+```
+
+## Environment variables
+
+### Required variables
+
+These variables must be set or the application will fail to start:
+
+- `DB_HOST` - MariaDB host address
+- `DB_NAME` - Database name
+- `DB_USER` - Database username
+- `DB_PASSWORD` - Database password
+
+### Optional variables
+
+These variables have default values defined in `src/config.py:36`:
+
+- `DB_PORT` - Database port (default: `3306`)
+- `LOG_DIR` - Log directory (default: `./log`)
+- `HTTP_TIMEOUT_SECONDS` - HTTP timeout for POST_ENDPOINT (default: `10`)
+- `MQTT_CLIENT_ID` - MQTT client ID (default: `mqtt-gateway`)
+- `MQTT_KEEPALIVE` - MQTT keepalive seconds (default: `60`)
+- `FLOWS_RELOAD_INTERVAL_SECONDS` - Flow reload interval (default: `600`)
+
+## Project structure
+
+The application code is organized in the `src/` directory:
+
+- `app.py` - Application entry point
+- `src/main.py` - Main application runner with startup logic
+- `src/config.py` - Configuration loading from environment variables
+- `src/db.py` - Database engine, session factory, and initialization
+- `src/models.py` - SQLAlchemy models for database tables
+- `src/mqtt_client.py` - MQTT client implementation
+- `src/processor.py` - Message processing logic
+- `src/logging_setup.py` - Error logging configuration
+- `src/constants.py` - Application constants
+
+## Database setup
+
+The gateway automatically creates required tables on first run. If you need to manually inspect or modify the database:
+
+<CodeGroup>
+```bash Test environment
+mysql -h 192.168.0.137 -P 3306 -u demo -p
+# Password: demo
+USE db;
+```
+
+```bash Local MariaDB
+mysql -u root -p
+CREATE DATABASE db;
+USE db;
+```
+</CodeGroup>
+
+## Logs
+
+Error logs are written to daily files in the `LOG_DIR` directory:
+
+- Format: `YYYY-MM-DD.log` (e.g., `2026-03-03.log`)
+- New file created each day
+- Logs append throughout the day
+- Only errors are logged (not informational messages)
+
+View today's logs:
+
+```bash
+tail -f ./log/$(date +%Y-%m-%d).log
+```
+
+## Development workflow
+
+<Steps>
+  <Step title="Make code changes">
+    Edit files in the `src/` directory using your preferred editor.
+  </Step>
+
+  <Step title="Stop the running application">
+    Press `Ctrl+C` in the terminal running `python app.py`.
+  </Step>
+
+  <Step title="Restart the application">
+    Run the application again to test your changes:
+
+    ```bash
+    python app.py
+    ```
+  </Step>
+
+  <Step title="Monitor logs">
+    Watch the logs for errors:
+
+    ```bash
+    tail -f ./log/$(date +%Y-%m-%d).log
+    ```
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+### Cannot connect to database
+
+Validate network connectivity to the MariaDB server:
+
+```bash
+telnet 192.168.0.137 3306
+```
+
+Or use `nc`:
+
+```bash
+nc -zv 192.168.0.137 3306
+```
+
+### No messages being processed
+
+Check that enabled flows exist in the database:
+
+```sql
+SELECT * FROM flows WHERE enabled = 1;
+```
+
+### POST_ENDPOINT not working
+
+Verify the `endpoint_url` is valid and the endpoint is reachable. Check logs for HTTP errors.
+
+### MQTT connection issues
+
+Verify the MQTT broker configuration in the `mqtt_servers` table:
+
+```sql
+SELECT * FROM mqtt_servers WHERE enabled = 1;
+```

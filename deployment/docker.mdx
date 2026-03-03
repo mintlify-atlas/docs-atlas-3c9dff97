@@ -1,0 +1,180 @@
+---
+title: Docker deployment
+description: Deploy MQTT Gateway using Docker containers
+---
+
+Deploy MQTT Gateway using Docker for consistent, isolated environments across different systems.
+
+## Prerequisites
+
+- Docker installed and running
+- Access to a MariaDB instance
+- Access to an MQTT broker
+- Network connectivity between containers and external services
+
+## Build the Docker image
+
+<Steps>
+  <Step title="Build the image">
+    Build the Docker image from the project root:
+
+    ```bash
+    docker build -t mqtt-gateway:latest .
+    ```
+
+    The Dockerfile uses Python 3.12-slim as the base image and installs all dependencies from `requirements.txt`:
+
+    ```dockerfile
+    FROM python:3.12-slim
+
+    ENV PYTHONDONTWRITEBYTECODE=1
+    ENV PYTHONUNBUFFERED=1
+
+    WORKDIR /app
+
+    RUN addgroup --system app && adduser --system --ingroup app app
+
+    COPY requirements.txt .
+    RUN pip install --no-cache-dir -r requirements.txt
+
+    COPY . .
+
+    CMD ["python", "app.py"]
+    ```
+  </Step>
+
+  <Step title="Verify the image">
+    Confirm the image was built successfully:
+
+    ```bash
+    docker images | grep mqtt-gateway
+    ```
+  </Step>
+</Steps>
+
+## Run the container
+
+<Steps>
+  <Step title="Create log directory">
+    Create a directory on the host to persist logs:
+
+    ```bash
+    mkdir -p ./log
+    ```
+  </Step>
+
+  <Step title="Run with environment variables">
+    Run the container with required environment variables:
+
+    ```bash
+    docker run --rm \
+      -e DB_HOST=192.168.0.137 \
+      -e DB_PORT=3306 \
+      -e DB_NAME=db \
+      -e DB_USER=demo \
+      -e DB_PASSWORD=demo \
+      -e LOG_DIR=/app/log \
+      -v "$(pwd)/log:/app/log" \
+      --name mqtt-gateway \
+      mqtt-gateway:latest
+    ```
+  </Step>
+</Steps>
+
+## Environment variables
+
+Configure the gateway using these environment variables:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DB_HOST` | Yes | - | MariaDB host address |
+| `DB_PORT` | No | `3306` | MariaDB port |
+| `DB_NAME` | Yes | - | Database name |
+| `DB_USER` | Yes | - | Database user |
+| `DB_PASSWORD` | Yes | - | Database password |
+| `LOG_DIR` | No | `./log` | Directory for log files |
+| `HTTP_TIMEOUT_SECONDS` | No | `10` | HTTP request timeout for POST_ENDPOINT flows |
+| `MQTT_CLIENT_ID` | No | `mqtt-gateway` | MQTT client identifier |
+| `MQTT_KEEPALIVE` | No | `60` | MQTT keepalive interval in seconds |
+| `FLOWS_RELOAD_INTERVAL_SECONDS` | No | `600` | Interval to reload flows (10 minutes) |
+
+## Volume mounts
+
+The container requires one volume mount for persistent logs:
+
+```bash
+-v "$(pwd)/log:/app/log"
+```
+
+This mounts the host's `./log` directory to `/app/log` inside the container, ensuring logs persist after the container stops.
+
+## Network configuration
+
+<Info>
+Ensure the Docker container can reach both the MariaDB database and MQTT broker. If running on a custom Docker network, use the `--network` flag.
+</Info>
+
+### Connect to existing network
+
+```bash
+docker run --rm \
+  --network my-network \
+  -e DB_HOST=mariadb \
+  -e DB_PORT=3306 \
+  -e DB_NAME=db \
+  -e DB_USER=demo \
+  -e DB_PASSWORD=demo \
+  -e LOG_DIR=/app/log \
+  -v "$(pwd)/log:/app/log" \
+  --name mqtt-gateway \
+  mqtt-gateway:latest
+```
+
+## Run in background
+
+Run the container as a daemon using the `-d` flag:
+
+```bash
+docker run -d \
+  -e DB_HOST=192.168.0.137 \
+  -e DB_PORT=3306 \
+  -e DB_NAME=db \
+  -e DB_USER=demo \
+  -e DB_PASSWORD=demo \
+  -e LOG_DIR=/app/log \
+  -v "$(pwd)/log:/app/log" \
+  --name mqtt-gateway \
+  --restart unless-stopped \
+  mqtt-gateway:latest
+```
+
+The `--restart unless-stopped` policy ensures the container restarts automatically if it crashes.
+
+## View logs
+
+View container logs using Docker commands:
+
+```bash
+# View all logs
+docker logs mqtt-gateway
+
+# Follow logs in real-time
+docker logs -f mqtt-gateway
+
+# View last 100 lines
+docker logs --tail 100 mqtt-gateway
+```
+
+Application error logs are written to the mounted volume at `./log/YYYY-MM-DD.log`.
+
+## Stop the container
+
+```bash
+docker stop mqtt-gateway
+```
+
+If running with `--rm`, the container is automatically removed when stopped. Otherwise, remove it manually:
+
+```bash
+docker rm mqtt-gateway
+```

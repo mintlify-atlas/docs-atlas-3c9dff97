@@ -1,0 +1,375 @@
+---
+title: Production deployment
+description: Best practices for deploying MQTT Gateway in production environments
+---
+
+Deploy MQTT Gateway to production with proper security, monitoring, and reliability configurations.
+
+## Production checklist
+
+Before deploying to production, ensure you have:
+
+- [ ] Secure database credentials (not default demo/demo)
+- [ ] Network isolation between gateway and databases
+- [ ] Log retention and rotation policy
+- [ ] Monitoring and alerting configured
+- [ ] Backup strategy for database
+- [ ] Container restart policy configured
+- [ ] Resource limits defined
+- [ ] Flow configuration tested in staging
+
+## Secure configuration
+
+### Use secrets management
+
+Never hardcode credentials in Docker commands or environment files. Use Docker secrets or external secrets management:
+
+<CodeGroup>
+```bash Docker secrets
+# Create secrets
+echo "production_user" | docker secret create db_user -
+echo "strong_password" | docker secret create db_password -
+
+# Reference in docker-compose.yml
+secrets:
+  db_user:
+    external: true
+  db_password:
+    external: true
+```
+
+```bash Environment file
+# Store in .env.production (never commit to git)
+DB_USER=production_user
+DB_PASSWORD=strong_password_here
+
+# Run with env file
+docker run --env-file .env.production mqtt-gateway:latest
+```
+</CodeGroup>
+
+### Database security
+
+Create a dedicated database user with minimal permissions:
+
+```sql
+CREATE USER 'mqtt_gateway'@'%' IDENTIFIED BY 'strong_password';
+GRANT SELECT, INSERT, UPDATE ON db.mqtt_servers TO 'mqtt_gateway'@'%';
+GRANT SELECT, INSERT, UPDATE ON db.flows TO 'mqtt_gateway'@'%';
+GRANT SELECT, INSERT ON db.data TO 'mqtt_gateway'@'%';
+FLUSH PRIVILEGES;
+```
+
+Update environment variables:
+
+```bash
+DB_USER=mqtt_gateway
+DB_PASSWORD=strong_password
+```
+
+### Network isolation
+
+Isolate the gateway on a dedicated Docker network:
+
+```bash
+# Create isolated network
+docker network create --driver bridge mqtt-gateway-net
+
+# Run container on isolated network
+docker run -d \
+  --network mqtt-gateway-net \
+  -e DB_HOST=mariadb \
+  -e DB_PORT=3306 \
+  -e DB_NAME=mqtt_production \
+  -e DB_USER=mqtt_gateway \
+  -e DB_PASSWORD=strong_password \
+  -e LOG_DIR=/app/log \
+  -v /var/log/mqtt-gateway:/app/log \
+  --name mqtt-gateway \
+  --restart unless-stopped \
+  mqtt-gateway:latest
+```
+
+## Resource limits
+
+Define CPU and memory limits to prevent resource exhaustion:
+
+```bash
+docker run -d \
+  --cpus="1.0" \
+  --memory="512m" \
+  --memory-reservation="256m" \
+  -e DB_HOST=192.168.0.137 \
+  -e DB_PORT=3306 \
+  -e DB_NAME=mqtt_production \
+  -e DB_USER=mqtt_gateway \
+  -e DB_PASSWORD=strong_password \
+  -e LOG_DIR=/app/log \
+  -v /var/log/mqtt-gateway:/app/log \
+  --name mqtt-gateway \
+  --restart unless-stopped \
+  mqtt-gateway:latest
+```
+
+## Logging and monitoring
+
+### Centralized logging
+
+Mount logs to a persistent location:
+
+```bash
+-v /var/log/mqtt-gateway:/app/log
+```
+
+The gateway creates daily log files with format `YYYY-MM-DD.log` in the configured `LOG_DIR`.
+
+### Log rotation
+
+Implement log rotation to manage disk space:
+
+```bash
+# /etc/logrotate.d/mqtt-gateway
+/var/log/mqtt-gateway/*.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    notifempty
+    missingok
+    create 0644 root root
+}
+```
+
+### Health monitoring
+
+Monitor container health:
+
+```bash
+# Check container status
+docker ps --filter name=mqtt-gateway
+
+# View recent logs
+docker logs --tail 50 mqtt-gateway
+
+# Check resource usage
+docker stats mqtt-gateway
+```
+
+Set up alerts for:
+- Container restarts
+- Database connection failures
+- MQTT connection drops
+- Disk space in log directory
+
+## Flow configuration
+
+### Reload interval tuning
+
+The gateway reloads flows from the database every `FLOWS_RELOAD_INTERVAL_SECONDS` (default 600 seconds / 10 minutes) as defined in `src/config.py:48`.
+
+Adjust based on your needs:
+
+```bash
+# More frequent updates (5 minutes)
+FLOWS_RELOAD_INTERVAL_SECONDS=300
+
+# Less frequent updates (30 minutes)
+FLOWS_RELOAD_INTERVAL_SECONDS=1800
+```
+
+<Warning>
+Shorter intervals increase database queries. Longer intervals delay flow configuration changes.
+</Warning>
+
+### HTTP timeout configuration
+
+For flows with `action=POST_ENDPOINT`, configure appropriate timeout based on endpoint response times:
+
+```bash
+# Default 10 seconds
+HTTP_TIMEOUT_SECONDS=10
+
+# Increase for slower endpoints
+HTTP_TIMEOUT_SECONDS=30
+```
+
+Timeout is configured in `src/config.py:45`.
+
+## Database management
+
+### Connection pooling
+
+The gateway uses SQLAlchemy with PyMySQL for database connections. Connection settings are defined in `src/config.py:22`:
+
+```python
+@property
+def sqlalchemy_url(self) -> str:
+    return (
+        f"mysql+pymysql://{self.db_user}:{self.db_password}"
+        f"@{self.db_host}:{self.db_port}/{self.db_name}"
+    )
+```
+
+### Data retention
+
+Implement data retention policies for the `data` table:
+
+```sql
+-- Delete data older than 90 days
+DELETE FROM data WHERE received_at < DATE_SUB(NOW(), INTERVAL 90 DAY);
+
+-- Archive old data before deletion
+INSERT INTO data_archive SELECT * FROM data WHERE received_at < DATE_SUB(NOW(), INTERVAL 90 DAY);
+```
+
+Schedule as a cron job or database event.
+
+### Backup strategy
+
+Regularly backup the database:
+
+```bash
+# Daily backup script
+#!/bin/bash
+BACKUP_DIR="/var/backups/mqtt-gateway"
+DATE=$(date +%Y-%m-%d)
+
+mkdir -p "$BACKUP_DIR"
+
+mysqldump -h 192.168.0.137 -u backup_user -p'backup_password' \
+  db mqtt_servers flows > "$BACKUP_DIR/mqtt-gateway-$DATE.sql"
+
+# Keep last 30 days
+find "$BACKUP_DIR" -name "*.sql" -mtime +30 -delete
+```
+
+## High availability
+
+### Container restart policy
+
+Use `--restart unless-stopped` to ensure the container restarts after crashes or host reboots:
+
+```bash
+--restart unless-stopped
+```
+
+Alternative restart policies:
+- `no` - Never restart (default)
+- `on-failure` - Restart only on non-zero exit
+- `always` - Always restart, even after manual stop
+- `unless-stopped` - Restart unless explicitly stopped
+
+### Multiple instances
+
+<Warning>
+Running multiple gateway instances requires careful MQTT client ID management to avoid conflicts.
+</Warning>
+
+To run multiple instances:
+
+1. Use unique `MQTT_CLIENT_ID` for each instance
+2. Partition flows by topic across instances
+3. Use a load balancer for HTTP endpoints
+
+```bash
+# Instance 1
+docker run -d \
+  -e MQTT_CLIENT_ID=mqtt-gateway-01 \
+  --name mqtt-gateway-01 \
+  mqtt-gateway:latest
+
+# Instance 2
+docker run -d \
+  -e MQTT_CLIENT_ID=mqtt-gateway-02 \
+  --name mqtt-gateway-02 \
+  mqtt-gateway:latest
+```
+
+## Performance optimization
+
+### Database indexes
+
+Add indexes for frequently queried columns:
+
+```sql
+-- Index on flow queries
+CREATE INDEX idx_flows_enabled ON flows(enabled);
+CREATE INDEX idx_flows_topic ON flows(topic);
+
+-- Index on data queries
+CREATE INDEX idx_data_received_at ON data(received_at);
+CREATE INDEX idx_data_flow_code ON data(flow_code);
+CREATE INDEX idx_data_flow_received ON data(flow_code, received_at);
+```
+
+### MQTT keepalive tuning
+
+Adjust `MQTT_KEEPALIVE` based on network reliability:
+
+```bash
+# Stable network (default)
+MQTT_KEEPALIVE=60
+
+# Unstable network - shorter keepalive
+MQTT_KEEPALIVE=30
+
+# Very stable network - longer keepalive
+MQTT_KEEPALIVE=120
+```
+
+Defined in `src/config.py:47`.
+
+## Troubleshooting production issues
+
+### Container won't start
+
+Check container logs:
+
+```bash
+docker logs mqtt-gateway
+```
+
+Common issues:
+- Missing required environment variables (`DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`)
+- Database connectivity issues
+- Invalid configuration values
+
+### Database connection failures
+
+Verify connectivity from container to database:
+
+```bash
+docker exec mqtt-gateway nc -zv 192.168.0.137 3306
+```
+
+Check firewall rules and network policies.
+
+### MQTT messages not processing
+
+Verify enabled flows exist:
+
+```sql
+SELECT code, topic, action, enabled FROM flows WHERE enabled = 1;
+```
+
+Check MQTT broker configuration:
+
+```sql
+SELECT host, port, enabled FROM mqtt_servers WHERE enabled = 1;
+```
+
+### POST_ENDPOINT failures
+
+Check logs for HTTP errors. Verify:
+- Endpoint URL is correct and accessible
+- `HTTP_TIMEOUT_SECONDS` is appropriate
+- Endpoint returns proper HTTP response codes
+- Network connectivity to endpoint
+
+Test endpoint manually:
+
+```bash
+curl -X POST https://endpoint.example.com/api \
+  -H "Content-Type: application/json" \
+  -d '{"temperature": 29.47, "humidity": 47.85}'
+```
